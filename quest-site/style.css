@@ -469,3 +469,10 @@ nav button.on svg { transform: translateY(-1px) scale(1.06); }
   ::-webkit-scrollbar-track { background: transparent; }
   .sheet { max-width: 560px; margin: 0 auto; border-radius: 22px 22px 0 0; }
 }
+
+/* 할 일 카드 카테고리 칩 */
+.catchip.tk {
+  border: none; cursor: pointer; margin-left: 0;
+  max-width: 96px; overflow: hidden; text-overflow: ellipsis;
+  padding: 5px 9px;
+}

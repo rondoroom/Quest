@@ -12,9 +12,13 @@ var S = (() => {
 })();
 
 var UI = (() => {
-  let exp = {};
-  try { exp = JSON.parse(localStorage.getItem(LS_UI)) || {}; } catch (e) {}
-  return { tab: 'today', open: null, expanded: exp, search: '', selDate: null, viewMon: null, chip: 'todo', listGroup: '', memo: {} };
+  let exp = {}, memo = {};
+  try {
+    const j = JSON.parse(localStorage.getItem(LS_UI)) || {};
+    if (j && j.exp) { exp = j.exp; memo = j.memo || {}; }
+    else exp = j; // 구버전 형식 호환
+  } catch (e) {}
+  return { tab: 'today', open: null, expanded: exp, search: '', selDate: null, viewMon: null, chip: 'todo', listGroup: '', memo };
 })();
 
 function save(bump = true) {
@@ -22,7 +26,7 @@ function save(bump = true) {
   localStorage.setItem(LS_KEY, JSON.stringify(S));
   if (bump) scheduleAutoSync();
 }
-function saveUI() { localStorage.setItem(LS_UI, JSON.stringify(UI.expanded)); }
+function saveUI() { localStorage.setItem(LS_UI, JSON.stringify({ exp: UI.expanded, memo: UI.memo })); }
 
 /* ================= 날짜 ================= */
 function todayStr() {
@@ -324,6 +328,8 @@ function toggleNode(n) {
 }
 function toggleTask(t) {
   if (t.src) { const f = findNode(t.src); if (f && !canToggle(f.node)) return; }
+  UI.keep = UI.keep || {};
+  UI.keep[t.id] = true; // 이 화면에 남겨두기 (밀린 일 체크 시 사라짐 방지)
   mut(() => {
     t.done = !t.done;
     if (t.src) { const f = findNode(t.src); if (f && f.node.st) f.node.st = t.done ? 'd' : 'o'; }
@@ -332,7 +338,8 @@ function toggleTask(t) {
 function sendToToday(n) {
   const dup = S.today.find((t) => t.src === n.id && !t.done);
   if (dup) { toast('이미 할 일 목록에 있는 항목'); return; }
-  mut(() => { S.today.push({ id: uid(), text: n.text, date: todayStr(), done: n.st === 'd', src: n.id }); });
+  const f = findNode(n.id);
+  mut(() => { S.today.push({ id: uid(), text: n.text, date: todayStr(), done: n.st === 'd', src: n.id, gcat: f ? f.sec.id : undefined }); });
   toast('할 일에 추가됨 ☖');
 }
 
@@ -689,8 +696,10 @@ function renderRoutineTab(m) {
 function renderTaskList(m, sel, td) {
   // 선택 날짜의 할 일 + (오늘이면) 밀린 일을 최상단에 합쳐서
   // 선택 날짜보다 이전인데 못 끝낸 일은 어떤 날짜를 보고 있어도 최상단에 이월 표시
+  if (UI.keepDate !== sel) { UI.keep = {}; UI.keepDate = sel; } // 날짜 바꾸면 정리
+  const keep = UI.keep || {};
   const list = S.today.filter((t) => t.date === sel);
-  const overdue = S.today.filter((t) => t.date < sel && !t.done);
+  const overdue = S.today.filter((t) => t.date < sel && (!t.done || keep[t.id]));
   const all = [...overdue, ...list];
 
   m.appendChild(el('div', 'day-label', (sel === td ? '오늘 할 일' : fmtDate2(sel) + ' 할 일')));
@@ -702,7 +711,9 @@ function renderTaskList(m, sel, td) {
     return;
   }
   const box = el('div');
-  for (const t of all) box.appendChild(taskRow(t, box, td));
+  const undone = all.filter((t) => !t.done);
+  const done = all.filter((t) => t.done);
+  for (const t of [...undone, ...done]) box.appendChild(taskRow(t, box, td));
   m.appendChild(box);
 }
 
@@ -726,6 +737,19 @@ function taskRow(t, container, td) {
   if (t.date < sel && !t.done) r.appendChild(el('span', 'chip late', fmtMD(t.date)));
   else if (t.date !== sel) r.appendChild(el('span', 'chip', fmtMD(t.date)));
 
+  // 카테고리 칩: 지정된 목표 카드 (또는 연결 출처)
+  const gsec = S.sections.find((x) => x.id === t.gcat) || (t.src && (findNode(t.src) || {}).sec) || null;
+  if (gsec) {
+    const gc = el('button', 'catchip tk', gsec.title);
+    gc.style.setProperty('--h', catColor(gsec.title));
+    gc.onclick = (e) => {
+      e.stopPropagation();
+      UI.tab = gsec.cat === 'list' ? 'list' : gsec.cat === 'routine' ? 'routine' : 'goal';
+      UI.open = gsec.id; UI.search = ''; render();
+    };
+    r.appendChild(gc);
+  }
+
   r.appendChild(el('div', 'txt', t.text));
 
   const handle = el('button', 'handle', '⠿');
@@ -734,7 +758,10 @@ function taskRow(t, container, td) {
   more.onclick = (e) => { e.stopPropagation(); taskMenu(t); };
   r.appendChild(more);
 
-  attachListDrag(r, container, (order) => mut(() => reorderWithin(S.today, order)));
+  attachListDrag(r, container, (order) => mut(() => {
+    const undoneIds = order.filter((id) => { const x = S.today.find((y) => y.id === id); return x && !x.done; });
+    reorderWithin(S.today, undoneIds);
+  }));
   r.onclick = () => { if (!suppressed(r)) editTaskSheet(t); };
   return r;
 }
@@ -757,6 +784,17 @@ function taskMenu(t) {
       return false;
     })(f.sec.nodes, []);
     saveUI(); render();
+  } });
+  opts.push({ icon: '🏷', label: t.gcat ? '카테고리 변경/해제' : '카테고리 지정 (목표 카드)', fn: () => {
+    const goals = S.sections.filter((x) => x.cat === 'goal');
+    sheet('카테고리 — 목표 카드 선택', [
+      { icon: '', label: '해제 (없음)', fn: () => mut(() => { delete t.gcat; }) },
+      ...goals.map((g) => ({
+        icon: t.gcat === g.id ? '✓' : '◎',
+        label: g.title,
+        fn: () => mut(() => { t.gcat = g.id; }),
+      })),
+    ]);
   } });
   opts.push({ icon: '✕', label: '삭제', danger: true, fn: () => mut(() => { S.today = S.today.filter((x) => x.id !== t.id); }) });
   sheet(t.text, opts);
@@ -1111,7 +1149,7 @@ function nodeRow(n, arr, depth, sec, num) {
 
   if (n.memo) {
     const mb = el('button', 'memobtn' + (UI.memo[n.id] ? ' on' : ''), '📝');
-    mb.onclick = (e) => { e.stopPropagation(); UI.memo[n.id] = !UI.memo[n.id]; render(); };
+    mb.onclick = (e) => { e.stopPropagation(); UI.memo[n.id] = !UI.memo[n.id]; if (!UI.memo[n.id]) delete UI.memo[n.id]; saveUI(); render(); };
     row.appendChild(mb);
   }
   const handle = el('button', 'handle', '⠿');
@@ -1136,6 +1174,7 @@ function memoSheet(n) {
     const t = v.memo.trim();
     if (t) { n.memo = t; UI.memo[n.id] = true; }
     else { delete n.memo; delete UI.memo[n.id]; }
+    saveUI();
   }));
 }
 
@@ -1269,7 +1308,6 @@ function applyRemote(cfg, remote) {
   cfg.lastSynced = S.mtime || 0;
   cfg.lastTime = Date.now();
   saveSyncCfg(cfg);
-  UI.expanded = {}; saveUI();
   render();
 }
 let syncing = false;
@@ -1302,6 +1340,19 @@ async function syncNow(manual) {
     if (manual) toast('동기화 실패: ' + e.message);
   } finally { syncing = false; }
 }
+/* 주기 동기화: 시트 편집 중이거나 드래그 중엔 건너뜀 (입력 유실 방지) */
+function syncTick() {
+  if (!syncCfg() || syncing) return;
+  if (typeof dragActive !== 'undefined' && dragActive) return;
+  const ov = $('overlay');
+  if (ov && ov.children.length) return;
+  syncNow(false);
+}
+setInterval(syncTick, 30000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) syncTick(); // 앱으로 돌아올 때 즉시 최신화
+});
+
 let autoTimer = null;
 function scheduleAutoSync() {
   if (!syncCfg()) return;
