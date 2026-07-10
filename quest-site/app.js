@@ -293,6 +293,109 @@ function canToggle(n) {
   return true;
 }
 
+/* ---------- 올해의 목표 팝업 ---------- */
+function yearGoalsPopup() {
+  const scrim = el('div', 'scrim center');
+  scrim.onclick = (e) => { if (e.target === scrim) scrim.remove(); };
+  const pop = el('div', 'calpop ygpop');
+  scrim.appendChild(pop);
+  $('overlay').appendChild(scrim);
+
+  function drawYears() {
+    pop.innerHTML = '';
+    pop.appendChild(el('h2', 'ygtitle', '올해의 목표'));
+    const row = el('div', 'yearrow');
+    for (const y of [2026, 2027, 2028, 2029, 2030]) {
+      const b = el('button', 'yearbtn' + (y === 2026 ? ' on' : ' off'), String(y));
+      if (y === 2026) b.onclick = () => drawGoals(y);
+      else b.disabled = true;
+      row.appendChild(b);
+    }
+    pop.appendChild(row);
+    pop.appendChild(el('p', 'yghint', '2026년 이후의 목표는 아직 잠겨 있습니다'));
+  }
+
+  function drawGoals(year) {
+    pop.innerHTML = '';
+    pop.appendChild(el('h2', 'ygtitle', year + ' 올해의 목표'));
+    const list = el('div', 'yglist');
+
+    // 카드(섹션)당 한 줄 — 이전/다음레벨로 그 자리에서 전환
+    const secs = S.sections.filter((x) => x.cat === 'goal')
+      .map((sec) => ({ sec, lvs: sec.nodes.filter((n) => n.lv).sort((a, b) => a.lv - b.lv) }))
+      .filter((x) => x.lvs.length);
+    // 초기 표시: 진행 중 레벨 (첫 미완료, 전부 완료면 마지막)
+    const idx = secs.map(({ sec, lvs }) => {
+      if (sec.pin) {
+        const p = lvs.findIndex((n) => n.id === sec.pin);
+        if (p > -1) return p;
+      }
+      const i = lvs.findIndex((n) => !levelComplete(n));
+      return i === -1 ? lvs.length - 1 : i;
+    });
+
+    function drawRows() {
+      list.innerHTML = '';
+      secs.forEach(({ sec, lvs }, si) => {
+        const n = lvs[idx[si]];
+        const r = el('div', 'ygrow');
+
+        const top = el('div', 'ygtop');
+        top.appendChild(el('span', 'ovbadge lv' + (levelComplete(n) ? ' full' : ''), '목표 ' + pad2(si + 1)));
+        const mid = el('button', 'ygmid');
+        mid.appendChild(el('span', 'txt', n.text));
+        mid.appendChild(el('span', 'ygsub', `${sec.title} · 레벨 ${pad2(n.lv)}/${pad2(lvs[lvs.length - 1].lv)}`));
+        mid.onclick = () => {
+          scrim.remove();
+          UI.tab = 'goal'; UI.open = sec.id; UI.search = ''; UI.nodeStack = [];
+          UI.expanded[n.id] = true; saveUI();
+          render();
+          const target = document.querySelector(`.nrow[data-did="${n.id}"]`);
+          if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        };
+        top.appendChild(mid);
+        r.appendChild(top);
+
+        const ctl = el('div', 'ygctl');
+        // 목표지정: 현재 표시 중인 레벨을 이 카드의 고정 목표로
+        const pinned = sec.pin === n.id;
+        const pin = el('button', 'ygpin' + (pinned ? ' on' : ''), pinned ? '✓ 목표지정' : '목표지정');
+        pin.onclick = () => {
+          mut(() => { if (sec.pin === n.id) delete sec.pin; else sec.pin = n.id; });
+          drawRows();
+        };
+        ctl.appendChild(pin);
+
+        const prev = el('button', 'ygnav', '‹');
+        prev.disabled = idx[si] === 0;
+        prev.onclick = () => { if (idx[si] > 0) { idx[si]--; drawRows(); } };
+        const next = el('button', 'ygnav', '›');
+        next.disabled = idx[si] === lvs.length - 1;
+        next.onclick = () => { if (idx[si] < lvs.length - 1) { idx[si]++; drawRows(); } };
+        ctl.appendChild(prev); ctl.appendChild(next);
+
+        const gap = el('div'); gap.style.flex = '1'; ctl.appendChild(gap);
+        const go = el('button', 'yggo', sec.title + ' ›');
+        go.onclick = mid.onclick;
+        ctl.appendChild(go);
+        r.appendChild(ctl);
+
+        list.appendChild(r);
+      });
+    }
+    drawRows();
+    pop.appendChild(list);
+    const foot = el('div', 'calfoot');
+    const back = el('button', '', '‹ 연도 선택');
+    back.onclick = drawYears;
+    const close = el('button', 'go', '닫기');
+    close.onclick = () => scrim.remove();
+    foot.appendChild(back); foot.appendChild(close);
+    pop.appendChild(foot);
+  }
+  drawYears();
+}
+
 /* ================= mutations ================= */
 function mut(fn) { fn(); save(); render(); }
 
@@ -684,6 +787,10 @@ function weekStrip(m) {
   cal.onclick = () => calPopup(sel, (v) => { UI.selDate = v; UI.viewMon = mondayOf(v); render(); });
   bar.appendChild(cal);
   bar.appendChild(el('div', 'tbdate', fmtDate2(sel)));
+  const sp = el('div'); sp.style.flex = '1'; bar.appendChild(sp);
+  const yg = el('button', 'ygbtn', '올해의 목표');
+  yg.onclick = yearGoalsPopup;
+  bar.appendChild(yg);
   m.appendChild(bar);
 }
 

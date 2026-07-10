@@ -1,0 +1,5 @@
+QUEST 웹 관리 페이지 교체/배포
+- 교체: GitHub 저장소 → Add file → Upload files → 이 파일들 전부 드래그(같은 이름 자동 덮어쓰기) → Commit → 1~2분 후 반영
+- 캐시: index.html의 ?v= 번호가 올라가므로 PC는 Ctrl+F5 한 번이면 됨
+- 최초 배포: Pages 활성화 → Custom domain: note.damabokchi.shop → DNS CNAME: note → <깃헙아이디>.github.io
+- 데이터/토큰 파일은 절대 업로드 금지 (my-data.json 등)
