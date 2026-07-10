@@ -18,7 +18,7 @@ var UI = (() => {
     if (j && j.exp) { exp = j.exp; memo = j.memo || {}; }
     else exp = j; // 구버전 형식 호환
   } catch (e) {}
-  return { tab: 'today', open: null, expanded: exp, search: '', selDate: null, viewMon: null, chip: 'todo', listGroup: '', memo };
+  return { tab: 'today', open: null, expanded: exp, search: '', selDate: null, viewMon: null, chip: 'todo', listGroup: '', memo, nodeStack: [] };
 })();
 
 function save(bump = true) {
@@ -532,10 +532,27 @@ const TABS = [
 
 function renderHeader() {
   const h = $('hdr'); h.innerHTML = '';
+  if (UI.open && UI.nodeStack.length) {
+    const sec = S.sections.find((x) => x.id === UI.open);
+    const f = findNode(UI.nodeStack[UI.nodeStack.length - 1]);
+    if (!sec || !f) { UI.nodeStack = []; return renderHeader(); }
+    const back = el('button', 'back', '‹');
+    back.onclick = () => { UI.nodeStack.pop(); render(); };
+    h.appendChild(back);
+    const wrap = el('div', 'hwrap sec');
+    wrap.appendChild(el('h1', '', f.node.text));
+    const p = progress(f.node.ch || []);
+    wrap.appendChild(el('div', 'sub', sec.title + (p.total ? ` · ${p.done}/${p.total}` : '')));
+    h.appendChild(wrap);
+    const menu = el('button', 'hbtn', '⋯');
+    menu.onclick = () => nodeMenu(f.node, f.arr, sec);
+    h.appendChild(menu);
+    return;
+  }
   if (UI.open) {
     const sec = S.sections.find((s) => s.id === UI.open);
     const back = el('button', 'back', '‹');
-    back.onclick = () => { UI.open = null; UI.search = ''; render(); };
+    back.onclick = () => { UI.open = null; UI.search = ''; UI.nodeStack = []; render(); };
     h.appendChild(back);
     const wrap = el('div', 'hwrap sec');
     const p = progress(sec.nodes);
@@ -564,7 +581,7 @@ function renderNav() {
       const from = TABS.findIndex((x) => x[0] === UI.tab);
       const to = TABS.findIndex((x) => x[0] === id);
       const dir = to > from ? 'slide-l' : to < from ? 'slide-r' : null;
-      UI.tab = id; UI.open = null; UI.search = '';
+      UI.tab = id; UI.open = null; UI.search = ''; UI.nodeStack = [];
       render();
       if (dir) {
         const mn = $('main');
@@ -581,6 +598,7 @@ function renderNav() {
 function renderMain() {
   const m = $('main'); m.innerHTML = '';
   document.querySelectorAll('.fab').forEach((f) => f.remove());
+  if (UI.open && UI.nodeStack.length) return renderNodePage(m);
   if (UI.open) return renderTree(m);
   if (UI.tab === 'today') return renderToday(m);
   if (UI.tab === 'routine') return renderRoutineTab(m);
@@ -1015,6 +1033,43 @@ function sectionCard(sec, num, box) {
   return c;
 }
 
+/* ---------- 도구 독립 페이지 ---------- */
+function renderNodePage(m) {
+  const sec = S.sections.find((x) => x.id === UI.open);
+  const f = sec && findNode(UI.nodeStack[UI.nodeStack.length - 1]);
+  if (!f) { UI.nodeStack = []; return render(); }
+  const node = f.node;
+
+  // 배지 줄
+  const head = el('div', 'pagehead');
+  if (node.lv) head.appendChild(el('span', 'ovbadge lv' + (levelComplete(node) ? ' full' : ''), '레벨 ' + pad2(node.lv)));
+  if (node.tool !== undefined) head.appendChild(el('span', 'ovbadge tool', node.tool === 0 ? '임시도구' : '도구 ' + pad2(node.tool)));
+  if (node.cat) {
+    const c = el('span', 'catchip', node.cat);
+    c.style.setProperty('--h', catColor(node.cat));
+    head.appendChild(c);
+  }
+  if (head.children.length) m.appendChild(head);
+
+  // 노드 자체 메모는 항상 표시
+  if (node.memo) {
+    const mb = el('div', 'memobox page', node.memo);
+    mb.onclick = () => memoSheet(node);
+    m.appendChild(mb);
+  }
+
+  const box = el('div'); box.id = 'treebox';
+  m.appendChild(box);
+  if (!(node.ch || []).length) {
+    const e = el('div', 'empty');
+    e.appendChild(el('span', 'glyph', '☖'));
+    e.appendChild(document.createTextNode('하위 항목이 없습니다. + 로 추가하세요.'));
+    m.appendChild(e);
+  } else drawNodes(box, node.ch, 0, sec);
+
+  fab(() => addNodeSheet(node.ch, `"${node.text}" 하위 추가`, sec));
+}
+
 /* ---------- 트리 ---------- */
 function renderTree(m) {
   const sec = S.sections.find((s) => s.id === UI.open);
@@ -1042,6 +1097,7 @@ function renderTree(m) {
       if (levelComplete(n)) row.appendChild(el('span', 'st', '☗'));
       else { const p = progress([n]); if (p.total) row.appendChild(el('span', 'st', `${p.done}/${p.total}`)); }
       row.onclick = () => {
+        if (sec.cat === 'list') { UI.nodeStack.push(n.id); render(); return; } // 경험노트: 독립 페이지
         UI.expanded[n.id] = true; saveUI(); render();
         const target = document.querySelector(`.nrow[data-did="${n.id}"]`);
         if (target && target.scrollIntoView) target.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1071,13 +1127,14 @@ function drawNodes(container, nodes, depth, sec) {
     if (q && !matches(n, q)) continue;
     const isCheck = n.st !== null && n.st !== undefined;
     if (isCheck) num++;
+    const isToolPage = n.tool !== undefined && !(UI.nodeStack.length && UI.nodeStack[UI.nodeStack.length - 1] === n.id);
     container.appendChild(nodeRow(n, nodes, depth, sec, isCheck ? num : null));
     if (n.memo && UI.memo[n.id]) {
       const mb = el('div', 'memobox', n.memo);
       mb.onclick = () => memoSheet(n);
       container.appendChild(mb);
     }
-    const has = n.ch && n.ch.length;
+    const has = n.ch && n.ch.length && n.tool === undefined && !(n.lv && sec.cat === 'list'); // 도구/경험노트 레벨은 독립 페이지로만
     const open = q ? true : !!UI.expanded[n.id];
     if (has && open) {
       const kids = el('div', 'kids');
@@ -1097,9 +1154,14 @@ function nodeRow(n, arr, depth, sec, num) {
     (n.st === 'd' ? ' done' : '') + (lvLocked ? ' locked' : ''));
   row.dataset.did = n.id;
 
-  const caret = el('button', 'caret' + (has ? (UI.expanded[n.id] ? ' open' : '') : ' leaf'), '▶');
-  caret.onclick = (e) => { e.stopPropagation(); UI.expanded[n.id] = !UI.expanded[n.id]; saveUI(); render(); };
-  row.appendChild(caret);
+  const isToolNode = n.tool !== undefined || (n.lv && sec.cat === 'list'); // 경험노트 레벨도 독립 페이지
+  if (isToolNode) {
+    row.appendChild(el('span', 'caret pageind', '›'));
+  } else {
+    const caret = el('button', 'caret' + (has ? (UI.expanded[n.id] ? ' open' : '') : ' leaf'), '▶');
+    caret.onclick = (e) => { e.stopPropagation(); UI.expanded[n.id] = !UI.expanded[n.id]; saveUI(); render(); };
+    row.appendChild(caret);
+  }
 
   // 넘버박스 = 체크박스 통합: 숫자를 누르면 ✓로 바뀌며 완료 처리
   if (!isHeader && num !== null) {
@@ -1161,6 +1223,7 @@ function nodeRow(n, arr, depth, sec, num) {
   attachTreeDrag(row);
   row.onclick = () => {
     if (suppressed(row)) return;
+    if (isToolNode) { UI.nodeStack.push(n.id); render(); return; }  // 도구 → 독립 페이지
     if (has) { UI.expanded[n.id] = !UI.expanded[n.id]; saveUI(); render(); }
     else if (!isHeader) toggleNode(n);
   };
@@ -1689,6 +1752,36 @@ function fab(fn) {
   b.addEventListener('pointercancel', end);
   b.onclick = () => { if (moved) { moved = false; return; } fn(); };
   document.body.appendChild(b);
+}
+
+/* 안드로이드 뒤로가기: 시트 → 페이지 → 섹션 → 홈탭 → 종료 확인 */
+window.__back = function () {
+  const ov = $('overlay');
+  if (ov && ov.children.length) { closeSheet(); return; }
+  if (UI.nodeStack && UI.nodeStack.length) { UI.nodeStack.pop(); render(); return; }
+  if (UI.open) { UI.open = null; UI.search = ''; render(); return; }
+  if (UI.tab !== 'today') { UI.tab = 'today'; render(); return; }
+  exitConfirm();
+};
+function exitConfirm() {
+  const scrim = el('div', 'scrim center');
+  scrim.onclick = (e) => { if (e.target === scrim) scrim.remove(); };
+  const pop = el('div', 'confirmpop');
+  pop.appendChild(el('div', 'cicon', '☖'));
+  pop.appendChild(el('h2', '', '앱을 종료할까요?'));
+  pop.appendChild(el('p', '', '변경 사항은 자동으로 저장되어 있습니다.'));
+  const act = el('div', 'cact');
+  const stay = el('button', 'btn-ghost', '취소');
+  stay.onclick = () => scrim.remove();
+  const quit = el('button', 'btn-quit', '종료');
+  quit.onclick = () => {
+    if (window.AndroidBridge && window.AndroidBridge.exitApp) { try { window.AndroidBridge.exitApp(); } catch (e) {} }
+    else scrim.remove();
+  };
+  act.appendChild(stay); act.appendChild(quit);
+  pop.appendChild(act);
+  scrim.appendChild(pop);
+  $('overlay').appendChild(scrim);
 }
 
 applyFont();

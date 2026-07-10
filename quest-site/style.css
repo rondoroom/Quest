@@ -476,3 +476,24 @@ nav button.on svg { transform: translateY(-1px) scale(1.06); }
   max-width: 96px; overflow: hidden; text-overflow: ellipsis;
   padding: 5px 9px;
 }
+
+/* ---------- 도구 독립 페이지 ---------- */
+.pagehead { display: flex; gap: 8px; align-items: center; margin: 4px 4px 14px; }
+.caret.pageind { visibility: visible; font-size: 18px; color: var(--faint); text-align: center; }
+.memobox.page { margin-left: 6px; margin-bottom: 16px; }
+
+/* ---------- 종료 확인 팝업 ---------- */
+.confirmpop {
+  width: 100%; max-width: 320px; background: var(--surface);
+  border-radius: 24px; padding: 28px 22px 20px; text-align: center;
+  animation: pop 0.18s ease;
+}
+.confirmpop .cicon { font-size: 34px; color: var(--gold); margin-bottom: 10px; }
+.confirmpop h2 { font-size: 20px; font-weight: 700; margin: 0 0 8px; }
+.confirmpop p { font-size: 15px; color: var(--dim); margin: 0 0 20px; }
+.confirmpop .cact { display: flex; gap: 10px; }
+.confirmpop .cact button {
+  flex: 1; border: none; border-radius: 14px; padding: 14px; font-size: 17px;
+  font-weight: 600; cursor: pointer;
+}
+.btn-quit { background: var(--danger); color: #fff; }
