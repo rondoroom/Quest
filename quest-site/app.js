@@ -293,31 +293,19 @@ function canToggle(n) {
   return true;
 }
 
-/* ---------- 올해의 목표 팝업 ---------- */
-function yearGoalsPopup() {
-  const scrim = el('div', 'scrim center');
-  scrim.onclick = (e) => { if (e.target === scrim) scrim.remove(); };
-  const pop = el('div', 'calpop ygpop');
-  scrim.appendChild(pop);
-  $('overlay').appendChild(scrim);
-
-  function drawYears() {
-    pop.innerHTML = '';
-    pop.appendChild(el('h2', 'ygtitle', '올해의 목표'));
-    const row = el('div', 'yearrow');
-    for (const y of [2026, 2027, 2028, 2029, 2030]) {
-      const b = el('button', 'yearbtn' + (y === 2026 ? ' on' : ' off'), String(y));
-      if (y === 2026) b.onclick = () => drawGoals(y);
-      else b.disabled = true;
-      row.appendChild(b);
-    }
-    pop.appendChild(row);
-    pop.appendChild(el('p', 'yghint', '2026년 이후의 목표는 아직 잠겨 있습니다'));
+/* ---------- 연간목표 탭 화면 ---------- */
+function renderYearGoals(m) {
+  // 연도 선택 바
+  const row = el('div', 'yearrow');
+  for (const y of [2026, 2027, 2028, 2029, 2030]) {
+    const b = el('button', 'yearbtn' + (y === 2026 ? ' on' : ' off'), String(y));
+    if (y !== 2026) b.disabled = true;
+    row.appendChild(b);
   }
+  m.appendChild(row);
+  m.appendChild(el('p', 'yghint', '2026년 이후의 목표는 아직 잠겨 있습니다'));
 
-  function drawGoals(year) {
-    pop.innerHTML = '';
-    pop.appendChild(el('h2', 'ygtitle', year + ' 올해의 목표'));
+  (function drawGoals(year) {
     const list = el('div', 'yglist');
 
     // 카드(섹션)당 한 줄 — 이전/다음레벨로 그 자리에서 전환
@@ -346,7 +334,6 @@ function yearGoalsPopup() {
         mid.appendChild(el('span', 'txt', n.text));
         mid.appendChild(el('span', 'ygsub', `${sec.title} · 레벨 ${pad2(n.lv)}/${pad2(lvs[lvs.length - 1].lv)}`));
         mid.onclick = () => {
-          scrim.remove();
           UI.tab = 'goal'; UI.open = sec.id; UI.search = ''; UI.nodeStack = [];
           UI.expanded[n.id] = true; saveUI();
           render();
@@ -384,16 +371,27 @@ function yearGoalsPopup() {
       });
     }
     drawRows();
-    pop.appendChild(list);
-    const foot = el('div', 'calfoot');
-    const back = el('button', '', '‹ 연도 선택');
-    back.onclick = drawYears;
-    const close = el('button', 'go', '닫기');
-    close.onclick = () => scrim.remove();
-    foot.appendChild(back); foot.appendChild(close);
-    pop.appendChild(foot);
-  }
-  drawYears();
+    m.appendChild(list);
+
+    // 레벨이 없는 목표 카드(예: 문제해결)는 하단에 일반 카드로
+    const plain = S.sections.filter((x) => x.cat === 'goal' && !x.nodes.some((n) => n.lv));
+    if (plain.length) {
+      m.appendChild(el('div', 'day-label', '기타 목표'));
+      for (const sec of plain) {
+        const p = progress(sec.nodes);
+        const c = el('div', 'card');
+        const rr = el('div', 'row');
+        rr.appendChild(el('div', 'title', sec.title));
+        if (p.total) rr.appendChild(el('span', 'pct', `${Math.round((p.done / p.total) * 100)}%`));
+        c.appendChild(rr);
+        const bar = el('div', 'bar'); const fi = el('i');
+        fi.style.width = p.total ? `${(p.done / p.total) * 100}%` : '0%';
+        bar.appendChild(fi); c.appendChild(bar);
+        c.onclick = () => { UI.open = sec.id; UI.search = ''; UI.nodeStack = []; render(); };
+        m.appendChild(c);
+      }
+    }
+  })(2026);
 }
 
 /* ================= mutations ================= */
@@ -429,13 +427,34 @@ function toggleNode(n) {
     }
   });
 }
+function findTask(id, arr = S.today, parent = null) {
+  for (const t of arr) {
+    if (t.id === id) return { task: t, arr, parent };
+    if (t.ch) { const r = findTask(id, t.ch, t); if (r) return r; }
+  }
+  return null;
+}
+function setTaskDeep(t, done) {
+  t.done = done;
+  if (t.src) { const f = findNode(t.src); if (f && f.node.st) f.node.st = done ? 'd' : 'o'; }
+  for (const c of t.ch || []) setTaskDeep(c, done);
+}
 function toggleTask(t) {
   if (t.src) { const f = findNode(t.src); if (f && !canToggle(f.node)) return; }
   UI.keep = UI.keep || {};
-  UI.keep[t.id] = true; // 이 화면에 남겨두기 (밀린 일 체크 시 사라짐 방지)
+  UI.keep[t.id] = true;
   mut(() => {
-    t.done = !t.done;
-    if (t.src) { const f = findNode(t.src); if (f && f.node.st) f.node.st = t.done ? 'd' : 'o'; }
+    const target = !t.done;
+    setTaskDeep(t, target);
+    // 상위 자동 체크/해제
+    let cur = findTask(t.id);
+    while (cur && cur.parent) {
+      const p = cur.parent;
+      const all = (p.ch || []).every((c) => c.done);
+      const nd = all;
+      if (p.done !== nd) { p.done = nd; if (p.src) { const f = findNode(p.src); if (f && f.node.st) f.node.st = nd ? 'd' : 'o'; } }
+      cur = findTask(p.id);
+    }
   });
 }
 function sendToToday(n) {
@@ -443,7 +462,7 @@ function sendToToday(n) {
   if (dup) { toast('이미 할 일 목록에 있는 항목'); return; }
   const f = findNode(n.id);
   mut(() => { S.today.push({ id: uid(), text: n.text, date: todayStr(), done: n.st === 'd', src: n.id, gcat: f ? f.sec.id : undefined }); });
-  toast('할 일에 추가됨 ☖');
+  toast('할 일에 추가됨');
 }
 
 /* ================= 드래그 공통 ================= */
@@ -628,8 +647,8 @@ const ICONS = {
 const TABS = [
   ['today', '할 일'],
   ['routine', '루틴'],
-  ['goal', '목표'],
-  ['list', '경험노트'],
+  ['goal', '연간목표'],
+  ['list', '프로젝트'],
   ['settings', '설정'],
 ];
 
@@ -705,7 +724,8 @@ function renderMain() {
   if (UI.open) return renderTree(m);
   if (UI.tab === 'today') return renderToday(m);
   if (UI.tab === 'routine') return renderRoutineTab(m);
-  if (UI.tab === 'goal' || UI.tab === 'list') return renderSections(m, UI.tab);
+  if (UI.tab === 'goal') return UI.open ? (UI.nodeStack.length ? renderNodePage(m) : renderTree(m)) : renderYearGoals(m);
+  if (UI.tab === 'list') return renderSections(m, UI.tab);
   if (UI.tab === 'settings') return renderSettings(m);
 }
 
@@ -787,10 +807,6 @@ function weekStrip(m) {
   cal.onclick = () => calPopup(sel, (v) => { UI.selDate = v; UI.viewMon = mondayOf(v); render(); });
   bar.appendChild(cal);
   bar.appendChild(el('div', 'tbdate', fmtDate2(sel)));
-  const sp = el('div'); sp.style.flex = '1'; bar.appendChild(sp);
-  const yg = el('button', 'ygbtn', '올해의 목표');
-  yg.onclick = yearGoalsPopup;
-  bar.appendChild(yg);
   m.appendChild(bar);
 }
 
@@ -830,16 +846,24 @@ function renderTaskList(m, sel, td) {
   m.appendChild(el('div', 'day-label', (sel === td ? '오늘 할 일' : fmtDate2(sel) + ' 할 일')));
   if (!all.length) {
     const e = el('div', 'empty');
-    e.appendChild(el('span', 'glyph', '☖'));
-    e.appendChild(document.createTextNode('할 일이 없습니다. + 로 추가하세요.'));
+    e.appendChild(el('span', 'glyph', '✓'));
+    e.appendChild(document.createTextNode('할 일이 없습니다. + 로 추가하세요.'))
     m.appendChild(e);
     return;
   }
   const box = el('div');
   const undone = all.filter((t) => !t.done);
   const done = all.filter((t) => t.done);
-  for (const t of [...undone, ...done]) box.appendChild(taskRow(t, box, td));
+  for (const t of [...undone, ...done]) drawTask(box, t, td, 0);
   m.appendChild(box);
+}
+
+function drawTask(container, t, td, depth) {
+  container.appendChild(taskRow(t, container, td, depth));
+  if (t.ch && t.ch.length) {
+    const kids = t.ch.slice().sort((a, b) => (a.done === b.done ? 0 : a.done ? 1 : -1));
+    for (const c of kids) drawTask(container, c, td, depth + 1);
+  }
 }
 
 function editTaskSheet(t) {
@@ -849,9 +873,10 @@ function editTaskSheet(t) {
   ], '저장', (v) => mut(() => { t.text = v.text.trim() || t.text; t.date = v.date; }));
 }
 
-function taskRow(t, container, td) {
+function taskRow(t, container, td, depth = 0) {
   const r = el('div', 'task' + (t.done ? ' done' : ''));
   r.dataset.did = t.id;
+  if (depth) r.style.marginLeft = (depth * 22) + 'px';
 
   const f = el('button', 'cbx' + (t.done ? ' d' : ''), '✓');
   f.onclick = (e) => { e.stopPropagation(); toggleTask(t); };
@@ -921,7 +946,16 @@ function taskMenu(t) {
       })),
     ]);
   } });
-  opts.push({ icon: '✕', label: '삭제', danger: true, fn: () => mut(() => { S.today = S.today.filter((x) => x.id !== t.id); }) });
+  opts.push({ icon: '＋', label: '하위 할 일 추가 (들여쓰기)', fn: () => formSheet('하위 할 일 추가', [
+    { name: 'text', label: '내용', placeholder: '하위 할 일' },
+  ], '추가', (v) => {
+    if (!v.text.trim()) return;
+    mut(() => { t.ch = t.ch || []; t.ch.push({ id: uid(), text: v.text.trim(), date: t.date, done: false }); });
+  }) });
+  opts.push({ icon: '✕', label: '삭제 (하위 포함)', danger: true, fn: () => mut(() => {
+    const f = findTask(t.id);
+    if (f) { const i = f.arr.indexOf(f.task); if (i > -1) f.arr.splice(i, 1); }
+  }) });
   sheet(t.text, opts);
 }
 
@@ -1080,7 +1114,7 @@ function renderSections(m, cat) {
   if (!secs.length) {
     const e = el('div', 'empty');
     e.appendChild(el('span', 'glyph', cat === 'goal' ? '◎' : '≣'));
-    e.appendChild(document.createTextNode(cat === 'goal' ? '아직 목표가 없습니다.' : '아직 경험노트가 없습니다.'));
+    e.appendChild(document.createTextNode(cat === 'goal' ? '아직 목표가 없습니다.' : '아직 프로젝트가 없습니다.'));
     const b = el('button', '', '텍스트 붙여넣어 가져오기');
     b.onclick = () => importTextSheet(cat);
     e.appendChild(b);
@@ -1129,7 +1163,7 @@ function sectionCard(sec, num, box) {
   const bar = el('div', 'bar'); const fill = el('i');
   fill.style.width = p.total ? `${(p.done / p.total) * 100}%` : '0%';
   bar.appendChild(fill); c.appendChild(bar);
-  c.appendChild(el('div', 'meta', p.total ? `☗ ${p.done} · ☖ ${p.total - p.done}` : '항목 없음'));
+  c.appendChild(el('div', 'meta', p.total ? `완료 ${p.done} · 남음 ${p.total - p.done}` : '항목 없음'));
   const commit = (order) => mut(() => reorderWithin(S.sections, order));
   handle.addEventListener('pointerdown', (e) => {
     e.preventDefault(); e.stopPropagation();
@@ -1150,7 +1184,7 @@ function renderNodePage(m) {
   // 배지 줄
   const head = el('div', 'pagehead');
   if (node.lv) head.appendChild(el('span', 'ovbadge lv' + (levelComplete(node) ? ' full' : ''), '레벨 ' + pad2(node.lv)));
-  if (node.tool !== undefined) head.appendChild(el('span', 'ovbadge tool', node.tool === 0 ? '임시도구' : '도구 ' + pad2(node.tool)));
+  if (node.tool !== undefined) head.appendChild(el('span', 'ovbadge tool', node.tool === 0 ? '임시' : '프로젝트 ' + pad2(node.tool)));
   if (node.cat) {
     const c = el('span', 'catchip', node.cat);
     c.style.setProperty('--h', catColor(node.cat));
@@ -1169,7 +1203,7 @@ function renderNodePage(m) {
   m.appendChild(box);
   if (!(node.ch || []).length) {
     const e = el('div', 'empty');
-    e.appendChild(el('span', 'glyph', '☖'));
+    e.appendChild(el('span', 'glyph', '✓'));
     e.appendChild(document.createTextNode('하위 항목이 없습니다. + 로 추가하세요.'));
     m.appendChild(e);
   } else drawNodes(box, node.ch, 0, sec);
@@ -1201,7 +1235,7 @@ function renderTree(m) {
       const row = el('div', 'lvrow' + (locked ? ' locked' : ''));
       row.appendChild(el('span', 'ovbadge lv' + (levelComplete(n) ? ' full' : ''), (locked ? '🔒 ' : '') + '레벨 ' + pad2(n.lv)));
       row.appendChild(el('div', 'txt', n.text));
-      if (levelComplete(n)) row.appendChild(el('span', 'st', '☗'));
+      if (levelComplete(n)) row.appendChild(el('span', 'st', '✓'));
       else { const p = progress([n]); if (p.total) row.appendChild(el('span', 'st', `${p.done}/${p.total}`)); }
       row.onclick = () => {
         if (sec.cat === 'list') { UI.nodeStack.push(n.id); render(); return; } // 경험노트: 독립 페이지
@@ -1284,7 +1318,7 @@ function nodeRow(n, arr, depth, sec, num) {
   }
   // 레벨/도구 타원 배지
   if (n.lv) row.appendChild(el('span', 'ovbadge lv' + (levelComplete(n) ? ' full' : ''), (lvLocked ? '🔒 ' : '') + '레벨 ' + pad2(n.lv)));
-  if (n.tool !== undefined) row.appendChild(el('span', 'ovbadge tool', n.tool === 0 ? '임시도구' : '도구 ' + pad2(n.tool)));
+  if (n.tool !== undefined) row.appendChild(el('span', 'ovbadge tool', n.tool === 0 ? '임시' : '프로젝트 ' + pad2(n.tool)));
   if (n.cat) {
     const chip = el('span', 'catchip', n.cat);
     chip.style.setProperty('--h', catColor(n.cat));
@@ -1348,10 +1382,23 @@ function memoSheet(n) {
   }));
 }
 
+function outdentNode(n, sec) {
+  const path = nodePath(sec.nodes, n.id);
+  if (path.length < 2) { toast('이미 최상위 항목입니다'); return; }
+  const parent = path[path.length - 2];
+  const gpArr = path.length >= 3 ? path[path.length - 3].ch : sec.nodes;
+  mut(() => {
+    const i = parent.ch.indexOf(n);
+    if (i > -1) parent.ch.splice(i, 1);
+    gpArr.splice(gpArr.indexOf(parent) + 1, 0, n);
+  });
+  toast(`"${parent.text}" 밖으로 이동됨`);
+}
+
 function addNodeSheet(arr, title, sec) {
   formSheet(title, [
     { name: 'text', label: '내용', placeholder: '항목 내용' },
-    { name: 'kind', label: '종류', type: 'select', options: [['o', '☖ 체크 항목'], ['h', '제목(그룹)']] },
+    { name: 'kind', label: '종류', type: 'select', options: [['o', '☑ 체크 항목'], ['h', '제목(그룹)']] },
     { name: 'cat', label: '카테고리 (선택)', placeholder: '예: 급함, 외주, 아이디어', chips: sec ? sectionCats(sec) : [] },
   ], '추가', (v) => {
     if (!v.text.trim()) return;
@@ -1367,19 +1414,21 @@ function nodeMenu(n, arr, sec) {
   const isHeader = n.st === null || n.st === undefined;
   const opts = [];
   if (!isHeader) {
-    opts.push({ icon: '☖', label: '할 일로 보내기', fn: () => sendToToday(n) });
-    opts.push({ icon: n.st === 'd' ? '☖' : '☗', label: n.st === 'd' ? '미완료로 되돌리기' : '완료 처리', fn: () => toggleNode(n) });
+    opts.push({ icon: '☑', label: '할 일로 보내기', fn: () => sendToToday(n) });
+    opts.push({ icon: n.st === 'd' ? '☐' : '☑', label: n.st === 'd' ? '미완료로 되돌리기' : '완료 처리', fn: () => toggleNode(n) });
+    opts.push({ icon: '≣', label: '제목(그룹)으로 전환', fn: () => mut(() => { n.st = null; }) });
   } else {
-    opts.push({ icon: '☖', label: '체크 항목으로 전환', fn: () => mut(() => { n.st = 'o'; }) });
+    opts.push({ icon: '☑', label: '체크 항목으로 전환', fn: () => mut(() => { n.st = 'o'; }) });
   }
+  opts.push({ icon: '⬆', label: '한 단계 밖으로 빼기', fn: () => outdentNode(n, sec) });
   opts.push({ icon: '◎', label: n.lv ? `레벨 변경/해제 (현재 레벨 ${pad2(n.lv)})` : '레벨 지정', fn: () => formSheet('레벨 지정', [
     { name: 'lv', label: '레벨 번호 (1~99, 비우면 해제)', value: n.lv ? String(n.lv) : '', placeholder: '예: 1' },
   ], '저장', (v) => mut(() => {
     const num = parseInt(v.lv, 10);
     if (num >= 1 && num <= 99) n.lv = num; else delete n.lv;
   })) });
-  opts.push({ icon: '🔧', label: n.tool !== undefined ? `도구 변경/해제 (현재 ${n.tool === 0 ? '임시도구' : '도구 ' + pad2(n.tool)})` : '도구 지정', fn: () => formSheet('도구 지정', [
-    { name: 'tool', label: '도구 번호 (1~99) / "임시" 입력 / 비우면 해제', value: n.tool === 0 ? '임시' : (n.tool ? String(n.tool) : ''), placeholder: '예: 1 또는 임시' },
+  opts.push({ icon: '🔧', label: n.tool !== undefined ? `프로젝트 변경/해제 (현재 ${n.tool === 0 ? '임시' : '프로젝트 ' + pad2(n.tool)})` : '프로젝트 지정', fn: () => formSheet('프로젝트 지정', [
+    { name: 'tool', label: '프로젝트 번호 (1~99) / "임시" 입력 / 비우면 해제', value: n.tool === 0 ? '임시' : (n.tool ? String(n.tool) : ''), placeholder: '예: 1 또는 임시' },
   ], '저장', (v) => mut(() => {
     const t = v.tool.trim();
     if (t === '임시') n.tool = 0;
@@ -1610,7 +1659,7 @@ function renderSettings(m) {
   m.appendChild(g0);
   const g1 = el('div', 'setgroup');
   g1.appendChild(el('h3', '', '데이터 가져오기'));
-  g1.appendChild(setBtn('📋 텍스트 붙여넣어 가져오기', '☖/☗ 형식의 노트를 그대로 붙여넣으면 자동 변환', () => importTextSheet('goal')));
+  g1.appendChild(setBtn('📋 텍스트 붙여넣어 가져오기', '체크리스트 형식 노트를 붙여넣으면 자동 변환', () => importTextSheet('goal')));
   g1.appendChild(setBtn('📂 JSON 파일 가져오기', '내보낸 백업 파일로 복원 (기존 데이터를 대체)', importJSON));
   g1.appendChild(setBtn('📄 JSON 텍스트로 가져오기', '백업 JSON을 붙여넣어 복원 (전체 교체)', importJSONText));
   g1.appendChild(setBtn('📥 섹션 업데이트 가져오기', '일부 섹션만 교체 — 나머지 진행 상황은 유지', importSectionUpdate));
@@ -1641,7 +1690,7 @@ function renderSettings(m) {
   g3.appendChild(el('h3', '', '통계'));
   let tot = 0, don = 0;
   for (const s of S.sections) { const p = progress(s.nodes); tot += p.total; don += p.done; }
-  g3.appendChild(setBtn(`☗ ${don} / ☖ ${tot - don} · 전체 ${tot}개 항목`, `섹션 ${S.sections.length}개 · 할 일 ${S.today.length}개`, () => {}));
+  g3.appendChild(setBtn(`완료 ${don} / 남음 ${tot - don} · 전체 ${tot}개 항목`, `섹션 ${S.sections.length}개 · 할 일 ${S.today.length}개`, () => {}));
   m.appendChild(g3);
 
   const g4 = el('div', 'setgroup');
@@ -1665,7 +1714,7 @@ function importTextSheet(defaultCat) {
     { name: 'cat', label: '카테고리', type: 'select', options: [
       ['goal', '목표'], ['list', '경험노트'], ['routine', '루틴'],
     ].sort((a) => (a[0] === defaultCat ? -1 : 0)) },
-    { name: 'text', label: '노트 내용 (☖/☗ 형식 그대로)', type: 'textarea', placeholder: '☖  할 일 1\n☗  끝낸 일\n07/05  날짜 있는 일' },
+    { name: 'text', label: '노트 내용 (체크리스트 형식 그대로)', type: 'textarea', placeholder: '☖  할 일 1\n☗  끝낸 일\n07/05  날짜 있는 일' },
   ], '가져오기', (v) => {
     if (!v.text.trim()) return;
     const { section, todayTasks } = parseDoc(v.title.trim() || '제목 없음', v.text, v.cat);
@@ -1874,7 +1923,7 @@ function exitConfirm() {
   const scrim = el('div', 'scrim center');
   scrim.onclick = (e) => { if (e.target === scrim) scrim.remove(); };
   const pop = el('div', 'confirmpop');
-  pop.appendChild(el('div', 'cicon', '☖'));
+  pop.appendChild(el('div', 'cicon', '✓'));
   pop.appendChild(el('h2', '', '앱을 종료할까요?'));
   pop.appendChild(el('p', '', '변경 사항은 자동으로 저장되어 있습니다.'));
   const act = el('div', 'cact');
