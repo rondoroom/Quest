@@ -18,7 +18,9 @@ var UI = (() => {
     if (j && j.exp) { exp = j.exp; memo = j.memo || {}; }
     else exp = j; // 구버전 형식 호환
   } catch (e) {}
-  return { tab: 'today', open: null, expanded: exp, search: '', selDate: null, viewMon: null, chip: 'todo', listGroup: '', memo, nodeStack: [] };
+  let taskCol = {};
+  try { taskCol = JSON.parse(localStorage.getItem('lifeos.taskcol')) || {}; } catch (e) {}
+  return { tab: 'today', open: null, expanded: exp, search: '', selDate: null, viewMon: null, chip: 'todo', listGroup: '', memo, nodeStack: [], taskCol };
 })();
 
 function save(bump = true) {
@@ -287,7 +289,7 @@ function canToggle(n) {
   const path = nodePath(f.sec.nodes, n.id);
   const lvNode = path.find((x) => x.lv);
   if (lvNode && levelLockedIn(f.sec, lvNode)) {
-    toast(`🔒 레벨 ${pad2(lvNode.lv)} 은 이전 레벨을 모두 완료해야 열립니다`);
+    toast(`🔒 퀘스트 ${pad2(lvNode.lv)} 은 이전 퀘스트를 모두 완료해야 열립니다`);
     return false;
   }
   return true;
@@ -303,95 +305,83 @@ function renderYearGoals(m) {
     row.appendChild(b);
   }
   m.appendChild(row);
-  m.appendChild(el('p', 'yghint', '2026년 이후의 목표는 아직 잠겨 있습니다'));
 
-  (function drawGoals(year) {
-    const list = el('div', 'yglist');
+  const list = el('div', 'yglist');
+  // 카드(목표)당 한 줄 — 소속명 없이, 아래 화살표로 퀘스트 단계 전환
+  const secs = S.sections.filter((x) => x.cat === 'goal')
+    .map((sec) => ({ sec, lvs: sec.nodes.filter((n) => n.lv).sort((a, b) => a.lv - b.lv) }))
+    .filter((x) => x.lvs.length);
+  // 표시 단계: 진행 중 퀘스트 (첫 미완료, 전부 완료면 마지막)
+  const idx = secs.map(({ lvs }) => {
+    const i = lvs.findIndex((n) => !levelComplete(n));
+    return i === -1 ? lvs.length - 1 : i;
+  });
 
-    // 카드(섹션)당 한 줄 — 이전/다음레벨로 그 자리에서 전환
-    const secs = S.sections.filter((x) => x.cat === 'goal')
-      .map((sec) => ({ sec, lvs: sec.nodes.filter((n) => n.lv).sort((a, b) => a.lv - b.lv) }))
-      .filter((x) => x.lvs.length);
-    // 초기 표시: 진행 중 레벨 (첫 미완료, 전부 완료면 마지막)
-    const idx = secs.map(({ sec, lvs }) => {
-      if (sec.pin) {
-        const p = lvs.findIndex((n) => n.id === sec.pin);
-        if (p > -1) return p;
-      }
-      const i = lvs.findIndex((n) => !levelComplete(n));
-      return i === -1 ? lvs.length - 1 : i;
-    });
+  function drawRows() {
+    list.innerHTML = '';
+    secs.forEach(({ sec, lvs }, si) => {
+      const n = lvs[idx[si]];
+      const r = el('div', 'ygrow2');
 
-    function drawRows() {
-      list.innerHTML = '';
-      secs.forEach(({ sec, lvs }, si) => {
-        const n = lvs[idx[si]];
-        const r = el('div', 'ygrow');
+      const badge = el('span', 'ovbadge lv' + (levelComplete(n) ? ' full' : ''), '목표 ' + pad2(si + 1));
+      r.appendChild(badge);
 
-        const top = el('div', 'ygtop');
-        top.appendChild(el('span', 'ovbadge lv' + (levelComplete(n) ? ' full' : ''), '목표 ' + pad2(si + 1)));
-        const mid = el('button', 'ygmid');
-        mid.appendChild(el('span', 'txt', n.text));
-        mid.appendChild(el('span', 'ygsub', `${sec.title} · 레벨 ${pad2(n.lv)}/${pad2(lvs[lvs.length - 1].lv)}`));
-        mid.onclick = () => {
-          UI.tab = 'goal'; UI.open = sec.id; UI.search = ''; UI.nodeStack = [];
-          UI.expanded[n.id] = true; saveUI();
-          render();
-          const target = document.querySelector(`.nrow[data-did="${n.id}"]`);
-          if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        };
-        top.appendChild(mid);
-        r.appendChild(top);
+      const mid = el('button', 'ygmid');
+      mid.appendChild(el('span', 'txt', n.text));
+      mid.appendChild(el('span', 'ygsub', `퀘스트 ${pad2(n.lv)} / ${pad2(lvs[lvs.length - 1].lv)}`));
+      mid.onclick = () => {
+        UI.tab = 'goal'; UI.open = sec.id; UI.search = '';
+        UI.nodeStack = [n.id];   // 분류 트리를 거치지 않고 퀘스트 페이지 바로
+        UI.fromYear = true;      // 뒤로가면 연간목표로 복귀
+        render();
+      };
+      r.appendChild(mid);
 
-        const ctl = el('div', 'ygctl');
-        // 목표지정: 현재 표시 중인 레벨을 이 카드의 고정 목표로
-        const pinned = sec.pin === n.id;
-        const pin = el('button', 'ygpin' + (pinned ? ' on' : ''), pinned ? '✓ 목표지정' : '목표지정');
-        pin.onclick = () => {
-          mut(() => { if (sec.pin === n.id) delete sec.pin; else sec.pin = n.id; });
-          drawRows();
-        };
-        ctl.appendChild(pin);
+      // 진행 중인 퀘스트가 완료되면 다음 퀘스트로 넘기는 아래 화살표
+      const done = levelComplete(n);
+      const hasNext = idx[si] < lvs.length - 1;
+      const adv = el('button', 'ygadv' + (done && hasNext ? ' ready' : ''), '▾');
+      adv.disabled = !(done && hasNext);
+      adv.title = done && hasNext ? '다음 목표로' : '';
+      adv.onclick = () => { if (done && hasNext) { idx[si]++; drawRows(); } };
+      r.appendChild(adv);
 
-        const prev = el('button', 'ygnav', '‹');
-        prev.disabled = idx[si] === 0;
-        prev.onclick = () => { if (idx[si] > 0) { idx[si]--; drawRows(); } };
-        const next = el('button', 'ygnav', '›');
-        next.disabled = idx[si] === lvs.length - 1;
-        next.onclick = () => { if (idx[si] < lvs.length - 1) { idx[si]++; drawRows(); } };
-        ctl.appendChild(prev); ctl.appendChild(next);
-
-        const gap = el('div'); gap.style.flex = '1'; ctl.appendChild(gap);
-        const go = el('button', 'yggo', sec.title + ' ›');
-        go.onclick = mid.onclick;
-        ctl.appendChild(go);
-        r.appendChild(ctl);
-
-        list.appendChild(r);
+      // 목표 삭제 = 이 목표의 퀘스트 체인 전체 삭제
+      const del = el('button', 'ygdel', '✕');
+      del.onclick = () => confirmSheet(`"${n.text}" 목표와 연결된 모든 퀘스트를 삭제할까요?`, () => {
+        mut(() => { S.sections = S.sections.filter((x) => x.id !== sec.id); });
       });
-    }
-    drawRows();
-    m.appendChild(list);
+      r.appendChild(del);
 
-    // 레벨이 없는 목표 카드(예: 문제해결)는 하단에 일반 카드로
-    const plain = S.sections.filter((x) => x.cat === 'goal' && !x.nodes.some((n) => n.lv));
-    if (plain.length) {
-      m.appendChild(el('div', 'day-label', '기타 목표'));
-      for (const sec of plain) {
-        const p = progress(sec.nodes);
-        const c = el('div', 'card');
-        const rr = el('div', 'row');
-        rr.appendChild(el('div', 'title', sec.title));
-        if (p.total) rr.appendChild(el('span', 'pct', `${Math.round((p.done / p.total) * 100)}%`));
-        c.appendChild(rr);
-        const bar = el('div', 'bar'); const fi = el('i');
-        fi.style.width = p.total ? `${(p.done / p.total) * 100}%` : '0%';
-        bar.appendChild(fi); c.appendChild(bar);
-        c.onclick = () => { UI.open = sec.id; UI.search = ''; UI.nodeStack = []; render(); };
-        m.appendChild(c);
-      }
+      list.appendChild(r);
+    });
+  }
+  drawRows();
+  m.appendChild(list);
+
+  // 목표 추가 버튼
+  const add = el('button', 'ygaddbtn', '＋ 목표 추가');
+  add.onclick = () => addYearGoal();
+  m.appendChild(add);
+
+  // 레벨(퀘스트)이 없는 목표 카드(예: 문제해결)는 하단에 일반 카드로
+  const plain = S.sections.filter((x) => x.cat === 'goal' && !x.nodes.some((n) => n.lv));
+  if (plain.length) {
+    m.appendChild(el('div', 'day-label', '기타 목표'));
+    for (const sec of plain) {
+      const p = progress(sec.nodes);
+      const c = el('div', 'card');
+      const rr = el('div', 'row');
+      rr.appendChild(el('div', 'title', sec.title));
+      if (p.total) rr.appendChild(el('span', 'pct', `${Math.round((p.done / p.total) * 100)}%`));
+      c.appendChild(rr);
+      const bar = el('div', 'bar'); const fi = el('i');
+      fi.style.width = p.total ? `${(p.done / p.total) * 100}%` : '0%';
+      bar.appendChild(fi); c.appendChild(bar);
+      c.onclick = () => { UI.open = sec.id; UI.search = ''; UI.nodeStack = []; render(); };
+      m.appendChild(c);
     }
-  })(2026);
+  }
 }
 
 /* ================= mutations ================= */
@@ -659,7 +649,11 @@ function renderHeader() {
     const f = findNode(UI.nodeStack[UI.nodeStack.length - 1]);
     if (!sec || !f) { UI.nodeStack = []; return renderHeader(); }
     const back = el('button', 'back', '‹');
-    back.onclick = () => { UI.nodeStack.pop(); render(); };
+    back.onclick = () => {
+      UI.nodeStack.pop();
+      if (!UI.nodeStack.length && UI.fromYear) { UI.open = null; UI.fromYear = false; }
+      render();
+    };
     h.appendChild(back);
     const wrap = el('div', 'hwrap sec');
     wrap.appendChild(el('h1', '', f.node.text));
@@ -703,7 +697,7 @@ function renderNav() {
       const from = TABS.findIndex((x) => x[0] === UI.tab);
       const to = TABS.findIndex((x) => x[0] === id);
       const dir = to > from ? 'slide-l' : to < from ? 'slide-r' : null;
-      UI.tab = id; UI.open = null; UI.search = ''; UI.nodeStack = [];
+      UI.tab = id; UI.open = null; UI.search = ''; UI.nodeStack = []; UI.fromYear = false;
       render();
       if (dir) {
         const mn = $('main');
@@ -860,7 +854,7 @@ function renderTaskList(m, sel, td) {
 
 function drawTask(container, t, td, depth) {
   container.appendChild(taskRow(t, container, td, depth));
-  if (t.ch && t.ch.length) {
+  if (t.ch && t.ch.length && !UI.taskCol[t.id]) {
     const kids = t.ch.slice().sort((a, b) => (a.done === b.done ? 0 : a.done ? 1 : -1));
     for (const c of kids) drawTask(container, c, td, depth + 1);
   }
@@ -877,6 +871,20 @@ function taskRow(t, container, td, depth = 0) {
   const r = el('div', 'task' + (t.done ? ' done' : ''));
   r.dataset.did = t.id;
   if (depth) r.style.marginLeft = (depth * 22) + 'px';
+
+  const hasKids = t.ch && t.ch.length;
+  if (hasKids) {
+    const col = el('button', 'tacc' + (UI.taskCol[t.id] ? '' : ' open'), '▶');
+    col.onclick = (e) => {
+      e.stopPropagation();
+      if (UI.taskCol[t.id]) delete UI.taskCol[t.id]; else UI.taskCol[t.id] = true;
+      localStorage.setItem('lifeos.taskcol', JSON.stringify(UI.taskCol));
+      render();
+    };
+    r.appendChild(col);
+  } else if (depth === 0) {
+    r.appendChild(el('span', 'tacc ph'));
+  }
 
   const f = el('button', 'cbx' + (t.done ? ' d' : ''), '✓');
   f.onclick = (e) => { e.stopPropagation(); toggleTask(t); };
@@ -902,6 +910,10 @@ function taskRow(t, container, td, depth = 0) {
 
   r.appendChild(el('div', 'txt', t.text));
 
+  if (hasKids) {
+    const dn = t.ch.filter((c) => c.done).length;
+    r.appendChild(el('span', 'tcount' + (dn === t.ch.length ? ' full' : ''), `${dn}/${t.ch.length}`));
+  }
   const handle = el('button', 'handle', '⠿');
   r.appendChild(handle);
   const more = el('button', 'more', '⋯');
@@ -1183,7 +1195,7 @@ function renderNodePage(m) {
 
   // 배지 줄
   const head = el('div', 'pagehead');
-  if (node.lv) head.appendChild(el('span', 'ovbadge lv' + (levelComplete(node) ? ' full' : ''), '레벨 ' + pad2(node.lv)));
+  if (node.lv) head.appendChild(el('span', 'ovbadge lv' + (levelComplete(node) ? ' full' : ''), '퀘스트 ' + pad2(node.lv)));
   if (node.tool !== undefined) head.appendChild(el('span', 'ovbadge tool', node.tool === 0 ? '임시' : '프로젝트 ' + pad2(node.tool)));
   if (node.cat) {
     const c = el('span', 'catchip', node.cat);
@@ -1211,6 +1223,23 @@ function renderNodePage(m) {
   fab(() => addNodeSheet(node.ch, `"${node.text}" 하위 추가`, sec));
 }
 
+function renderYearGoalsReset() { render(); }
+function addYearGoal() {
+  formSheet('새 목표 추가', [
+    { name: 'text', label: '목표 내용 (독립된 새 목표로 생성됩니다)', placeholder: '예: 월 2억원 수익 만들기' },
+  ], '추가', (v) => {
+    const text = v.text.trim();
+    if (!text) return;
+    mut(() => {
+      S.sections.push({
+        id: uid(), title: text, cat: 'goal',
+        nodes: [{ id: uid(), text, st: null, lv: 1, ch: [] }],
+      });
+    });
+    toast('새 목표 생성됨 — 눌러서 퀘스트를 채우세요');
+  });
+}
+
 /* ---------- 트리 ---------- */
 function renderTree(m) {
   const sec = S.sections.find((s) => s.id === UI.open);
@@ -1229,11 +1258,11 @@ function renderTree(m) {
   const lvs = levelNodesOf(sec).slice().sort((a, b) => a.lv - b.lv);
   if (lvs.length) {
     const lb = el('div', 'lvlist');
-    lb.appendChild(el('h4', '', '레벨리스트'));
+    lb.appendChild(el('h4', '', '퀘스트 목록'));
     for (const n of lvs) {
       const locked = levelLockedIn(sec, n);
       const row = el('div', 'lvrow' + (locked ? ' locked' : ''));
-      row.appendChild(el('span', 'ovbadge lv' + (levelComplete(n) ? ' full' : ''), (locked ? '🔒 ' : '') + '레벨 ' + pad2(n.lv)));
+      row.appendChild(el('span', 'ovbadge lv' + (levelComplete(n) ? ' full' : ''), (locked ? '🔒 ' : '') + '퀘스트 ' + pad2(n.lv)));
       row.appendChild(el('div', 'txt', n.text));
       if (levelComplete(n)) row.appendChild(el('span', 'st', '✓'));
       else { const p = progress([n]); if (p.total) row.appendChild(el('span', 'st', `${p.done}/${p.total}`)); }
@@ -1317,7 +1346,7 @@ function nodeRow(n, arr, depth, sec, num) {
     row.appendChild(f);
   }
   // 레벨/도구 타원 배지
-  if (n.lv) row.appendChild(el('span', 'ovbadge lv' + (levelComplete(n) ? ' full' : ''), (lvLocked ? '🔒 ' : '') + '레벨 ' + pad2(n.lv)));
+  if (n.lv) row.appendChild(el('span', 'ovbadge lv' + (levelComplete(n) ? ' full' : ''), (lvLocked ? '🔒 ' : '') + '퀘스트 ' + pad2(n.lv)));
   if (n.tool !== undefined) row.appendChild(el('span', 'ovbadge tool', n.tool === 0 ? '임시' : '프로젝트 ' + pad2(n.tool)));
   if (n.cat) {
     const chip = el('span', 'catchip', n.cat);
@@ -1421,8 +1450,8 @@ function nodeMenu(n, arr, sec) {
     opts.push({ icon: '☑', label: '체크 항목으로 전환', fn: () => mut(() => { n.st = 'o'; }) });
   }
   opts.push({ icon: '⬆', label: '한 단계 밖으로 빼기', fn: () => outdentNode(n, sec) });
-  opts.push({ icon: '◎', label: n.lv ? `레벨 변경/해제 (현재 레벨 ${pad2(n.lv)})` : '레벨 지정', fn: () => formSheet('레벨 지정', [
-    { name: 'lv', label: '레벨 번호 (1~99, 비우면 해제)', value: n.lv ? String(n.lv) : '', placeholder: '예: 1' },
+  opts.push({ icon: '◎', label: n.lv ? `퀘스트 변경/해제 (현재 퀘스트 ${pad2(n.lv)})` : '퀘스트 지정', fn: () => formSheet('퀘스트 지정', [
+    { name: 'lv', label: '퀘스트 번호 (1~99, 비우면 해제)', value: n.lv ? String(n.lv) : '', placeholder: '예: 1' },
   ], '저장', (v) => mut(() => {
     const num = parseInt(v.lv, 10);
     if (num >= 1 && num <= 99) n.lv = num; else delete n.lv;
@@ -1448,6 +1477,16 @@ function nodeMenu(n, arr, sec) {
   })) });
   opts.push({ icon: '📝', label: n.memo ? '메모 수정' : '메모 작성', fn: () => memoSheet(n) });
   opts.push({ icon: '＋', label: '하위 항목 추가', fn: () => { UI.expanded[n.id] = true; saveUI(); addNodeSheet(n.ch, `"${n.text}" 하위 추가`, sec); } });
+  if (n.lv && sec.cat === 'goal') opts.push({ icon: '⏭', label: '다음 퀘스트 추가 (이 목표의 체인 확장)', fn: () => formSheet('다음 퀘스트 추가', [
+    { name: 'text', label: '퀘스트 내용', placeholder: '예: 월 2000만원 수익 만들기' },
+  ], '추가', (v) => {
+    if (!v.text.trim()) return;
+    mut(() => {
+      const maxLv = sec.nodes.reduce((mx, x) => (x.lv && x.lv > mx ? x.lv : mx), 0);
+      sec.nodes.push({ id: uid(), text: v.text.trim(), st: null, lv: maxLv + 1, ch: [] });
+    });
+    toast('퀘스트 ' + pad2(sec.nodes.reduce((mx, x) => (x.lv && x.lv > mx ? x.lv : mx), 0)) + ' 추가됨');
+  }) });
   opts.push({ icon: '✎', label: '수정', fn: () => formSheet('수정', [
     { name: 'text', label: '내용', value: n.text },
   ], '저장', (v) => mut(() => { n.text = v.text.trim() || n.text; })) });
@@ -1914,7 +1953,11 @@ function fab(fn) {
 window.__back = function () {
   const ov = $('overlay');
   if (ov && ov.children.length) { closeSheet(); return; }
-  if (UI.nodeStack && UI.nodeStack.length) { UI.nodeStack.pop(); render(); return; }
+  if (UI.nodeStack && UI.nodeStack.length) {
+    UI.nodeStack.pop();
+    if (!UI.nodeStack.length && UI.fromYear) { UI.open = null; UI.fromYear = false; }
+    render(); return;
+  }
   if (UI.open) { UI.open = null; UI.search = ''; render(); return; }
   if (UI.tab !== 'today') { UI.tab = 'today'; render(); return; }
   exitConfirm();
